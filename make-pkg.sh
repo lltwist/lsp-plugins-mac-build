@@ -1,7 +1,7 @@
 #!/bin/bash
-# Собирает macOS installer .pkg из готовых VST3-бандлов LSP Plugins.
-# Ожидает что arm64 и x86_64 сборки уже сделаны в build-arm64/ и build-x86_64/,
-# либо запускается с одной из них (universal lipo если есть обе).
+# Build a macOS .pkg installer from existing LSP Plugins VST3 bundles.
+# Expects arm64 and/or x86_64 builds in build-arm64/ and build-x86_64/.
+# Runs lipo to merge into a universal binary when both are present.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

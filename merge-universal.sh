@@ -1,12 +1,12 @@
 #!/bin/bash
-# Сливает arm64 и x86_64 сборки LSP Plugins в universal binary через lipo,
-# затем упаковывает в macOS .pkg installer.
+# Merge arm64 and x86_64 LSP Plugins builds into a universal binary via lipo,
+# then wrap into a macOS .pkg installer.
 #
-# Ожидается:
+# Expects:
 #   _staged-arm64-saved/Library/Audio/Plug-Ins/VST3/lsp-plugins.vst3
 #   _staged-x86_64/Library/Audio/Plug-Ins/VST3/lsp-plugins.vst3
 #
-# Результат:
+# Produces:
 #   LSP-Plugins-1.2.33-macos-universal.pkg
 
 set -euo pipefail

@@ -1,3 +1,15 @@
+diff --git a/include/private/cocoa/CocoaDisplay.h b/include/private/cocoa/CocoaDisplay.h
+index 0a36cef..d5e0768 100644
+--- a/include/private/cocoa/CocoaDisplay.h
++++ b/include/private/cocoa/CocoaDisplay.h
+@@ -61,6 +61,7 @@ namespace lsp
+                     lltl::parray<CocoaWindow>   sTargets;                   // Targets for event delivery
+                     lltl::parray<CocoaWindow>   vWindows;                   // All registered windows
+                     size_t                      lastMouseButton;
++                    CocoaWindow                *pDragTarget;     // window that received mouseDown until matching mouseUp
+                 
+                 #ifdef USE_LIBFREETYPE
+                     ft::FontManager             sFontManager;
 diff --git a/include/private/cocoa/CocoaWindow.h b/include/private/cocoa/CocoaWindow.h
 index e8b74a3..62c48bf 100644
 --- a/include/private/cocoa/CocoaWindow.h
@@ -19,18 +31,19 @@ index e8b74a3..62c48bf 100644
                      virtual status_t    invalidate() override;
  
 diff --git a/src/main/cocoa/CocoaCairoView.mm b/src/main/cocoa/CocoaCairoView.mm
-index ad206a5..7742b84 100644
+index ad206a5..b797644 100644
 --- a/src/main/cocoa/CocoaCairoView.mm
 +++ b/src/main/cocoa/CocoaCairoView.mm
-@@ -94,6 +94,7 @@ - (instancetype)initWithFrame:(NSRect)frameRect
+@@ -94,6 +94,8 @@ - (instancetype)initWithFrame:(NSRect)frameRect
      self = [super initWithFrame:frameRect];
      if (self)
      {
 +        [self setWantsLayer:YES];
++        self.layer.backgroundColor = [[NSColor blackColor] CGColor];
          //lsp_trace("Register event for view: %p", self);
          NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
          [center addObserverForName:@"ForceExpose"
-@@ -181,6 +182,8 @@ - (void)dealloc
+@@ -181,6 +183,8 @@ - (void)dealloc
  // Updates the view
  - (void)triggerRedraw
  {
@@ -39,7 +52,7 @@ index ad206a5..7742b84 100644
      if (self->_needsRedrawing)
          [self setNeedsDisplay:YES];
  }
-@@ -242,6 +245,16 @@ - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+@@ -242,6 +246,16 @@ - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
      return NO;
  }
  
@@ -57,13 +70,42 @@ index ad206a5..7742b84 100644
  {
      [super updateTrackingAreas];
 diff --git a/src/main/cocoa/CocoaDisplay.mm b/src/main/cocoa/CocoaDisplay.mm
-index c136abb..9dd0bbc 100644
+index c136abb..248ab94 100644
 --- a/src/main/cocoa/CocoaDisplay.mm
 +++ b/src/main/cocoa/CocoaDisplay.mm
-@@ -210,6 +210,31 @@
-                 const nswindow_t nsWindow = nswindow_t { [nsevent window] };
-                 CocoaWindow *target = find_window(nsWindow);
+@@ -55,6 +55,8 @@
+             CocoaDisplay::CocoaDisplay(): IDisplay()
+             {
+                bExit                   = false;
++               lastMouseButton         = 0;
++               pDragTarget             = NULL;
+             }
  
+             CocoaDisplay::~CocoaDisplay()
+@@ -207,8 +209,49 @@
+                     return;
+ 
+                 NSEventType type = [nsevent type];
++
++                // During an in-progress drag, route mouse events to the window that received
++                // the matching mouseDown — even if the cursor leaves the view's bounds.
++                const bool isDragMove = (type == NSEventTypeLeftMouseDragged) ||
++                                        (type == NSEventTypeRightMouseDragged) ||
++                                        (type == NSEventTypeOtherMouseDragged) ||
++                                        (type == NSEventTypeMouseMoved);
++                const bool isMouseUp  = (type == NSEventTypeLeftMouseUp) ||
++                                        (type == NSEventTypeRightMouseUp) ||
++                                        (type == NSEventTypeOtherMouseUp);
++
++                CocoaWindow *target = NULL;
++                if ((isDragMove || isMouseUp) && pDragTarget != NULL)
++                    target = pDragTarget;
++
+                 const nswindow_t nsWindow = nswindow_t { [nsevent window] };
+-                CocoaWindow *target = find_window(nsWindow);
++                if (!target)
++                    target = find_window(nsWindow);
++
 +                // Embedded case: nsevent's window is the host's (Ableton), not ours.
 +                // Locate our CocoaWindow by matching the hit-test view to a known pCocoaView.
 +                if (!target)
@@ -88,12 +130,61 @@ index c136abb..9dd0bbc 100644
 +                        }
 +                    }
 +                }
-+
+ 
                  if (!target)
                      return;
-                 
+@@ -222,9 +265,30 @@
+                 unichar keysym = 0;
+ 
+                 NSPoint locInWindow = [nsevent locationInWindow];
+-                NSView *targetView = [[nsWindow.window contentView] hitTest:locInWindow];
+-                NSPoint locInView = [targetView convertPoint:locInWindow fromView:nil];
+-                NSRect cFrame = [targetView frame];
++                // Convert to coords inside target's view (works even when cursor leaves view)
++                NSView *coordView = target->pCocoaView;
++                NSPoint locInView;
++                NSRect cFrame;
++                if (coordView != nil && [coordView window] != nil)
++                {
++                    if ([coordView window] != nsWindow.window)
++                    {
++                        NSPoint scr = [nsWindow.window convertPointToScreen:locInWindow];
++                        NSPoint inHostWnd = [[coordView window] convertPointFromScreen:scr];
++                        locInView = [coordView convertPoint:inHostWnd fromView:nil];
++                    }
++                    else
++                    {
++                        locInView = [coordView convertPoint:locInWindow fromView:nil];
++                    }
++                    cFrame = [coordView frame];
++                }
++                else
++                {
++                    NSView *hitView = [[nsWindow.window contentView] hitTest:locInWindow];
++                    locInView = [hitView convertPoint:locInWindow fromView:nil];
++                    cFrame = [hitView frame];
++                }
+ 
+                 ue.nLeft = locInView.x;
+                 ue.nTop = cFrame.size.height - locInView.y;
+@@ -238,6 +302,7 @@
+                         ue.nType = UIE_MOUSE_DOWN;
+                         ue.nCode = decode_mcb(nsevent);
+                         lastMouseButton = decode_modifier(nsevent);
++                        pDragTarget = target;
+                         //ue.nState = decode_modifier(nsevent);
+                         break;
+ 
+@@ -249,6 +314,7 @@
+                         ue.nState = decode_modifier(nsevent);
+                         ue.nState = lastMouseButton;
+                         lastMouseButton = decode_modifier(nsevent);
++                        pDragTarget = NULL;
+                         break;
+ 
+                     case NSEventTypeMouseMoved:
 diff --git a/src/main/cocoa/CocoaWindow.mm b/src/main/cocoa/CocoaWindow.mm
-index c6f1546..171e9a1 100644
+index c6f1546..70cbf3d 100644
 --- a/src/main/cocoa/CocoaWindow.mm
 +++ b/src/main/cocoa/CocoaWindow.mm
 @@ -68,8 +68,10 @@
@@ -107,7 +198,15 @@ index c6f1546..171e9a1 100644
                      pCocoaWindow = [view window];
                  }
  
-@@ -137,8 +139,9 @@
+@@ -118,6 +120,7 @@
+                                                 defer:NO];
+ 
+                     pCocoaWindow = window;
++                    [pCocoaWindow setBackgroundColor:[NSColor blackColor]];
+                     [pCocoaWindow setIsVisible:NO];
+ 
+                     // Create a cocoa view and set it to window
+@@ -137,8 +140,9 @@
                  }
                  else
                  {
@@ -119,7 +218,7 @@ index c6f1546..171e9a1 100644
                      wrapperView.display = pCocoaDisplay;
                      pCocoaView = wrapperView;
                      [pCocoaView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-@@ -364,7 +367,41 @@
+@@ -364,7 +368,41 @@
                      return STATUS_BAD_STATE;
  
                  bInvalidate = true;
@@ -162,7 +261,7 @@ index c6f1546..171e9a1 100644
                  return STATUS_OK;
              }
  
-@@ -804,7 +841,8 @@
+@@ -804,7 +842,8 @@
                  }
  
                  //[pCocoaWindow orderFrontRegardless];
@@ -172,3 +271,61 @@ index c6f1546..171e9a1 100644
  
                  // Simulate missing show event
                  lsp_trace("Emitting UIE_SHOW event");
+@@ -874,6 +913,23 @@
+             {
+                 if (realize == nullptr)
+                     return STATUS_BAD_ARGUMENTS;
++
++                if (pCocoaParentView != nil)
++                {
++                    NSWindow *hostWnd = [pCocoaParentView window];
++                    if (hostWnd == nil)
++                        return STATUS_BAD_STATE;
++                    NSRect b = [pCocoaParentView convertRect:[pCocoaParentView bounds] toView:nil];
++                    NSRect s = [hostWnd convertRectToScreen:b];
++                    ssize_t screenW = 0, screenH = 0;
++                    pCocoaDisplay->screen_size(0, &screenW, &screenH);
++                    realize->nLeft   = static_cast<ssize_t>(s.origin.x);
++                    realize->nTop    = static_cast<ssize_t>(screenH - s.origin.y - s.size.height);
++                    realize->nWidth  = static_cast<ssize_t>(s.size.width);
++                    realize->nHeight = static_cast<ssize_t>(s.size.height);
++                    return STATUS_OK;
++                }
++
+                 if (pCocoaWindow == nil)
+                     return STATUS_BAD_STATE;
+ 
+@@ -1057,11 +1113,33 @@
+ 
+             ssize_t CocoaWindow::left()
+             {
++                if (pCocoaParentView != nil)
++                {
++                    NSWindow *hostWnd = [pCocoaParentView window];
++                    if (hostWnd != nil)
++                    {
++                        NSRect b = [pCocoaParentView convertRect:[pCocoaParentView bounds] toView:nil];
++                        NSRect s = [hostWnd convertRectToScreen:b];
++                        return static_cast<ssize_t>(s.origin.x);
++                    }
++                }
+                 return sSize.nLeft;
+             }
+ 
+             ssize_t CocoaWindow::top()
+             {
++                if (pCocoaParentView != nil)
++                {
++                    NSWindow *hostWnd = [pCocoaParentView window];
++                    if (hostWnd != nil)
++                    {
++                        NSRect b = [pCocoaParentView convertRect:[pCocoaParentView bounds] toView:nil];
++                        NSRect s = [hostWnd convertRectToScreen:b];
++                        ssize_t screenH = 0, screenW = 0;
++                        pCocoaDisplay->screen_size(0, &screenW, &screenH);
++                        return static_cast<ssize_t>(screenH - s.origin.y - s.size.height);
++                    }
++                }
+                 return sSize.nTop;
+             }
+ 
