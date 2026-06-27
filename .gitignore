@@ -1,0 +1,12 @@
+lsp-plugins/
+_staged-arm64-saved/
+_staged-arm64/
+_staged-x86_64/
+_staged-universal/
+build-arm64/
+build-x86_64/
+build-universal/
+*.pkg
+*.tar.gz
+*.dmg
+.DS_Store

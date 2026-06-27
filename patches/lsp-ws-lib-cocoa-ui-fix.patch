@@ -1,0 +1,51 @@
+diff --git a/include/private/cocoa/CocoaWindow.h b/include/private/cocoa/CocoaWindow.h
+index e8b74a3..068d532 100644
+--- a/include/private/cocoa/CocoaWindow.h
++++ b/include/private/cocoa/CocoaWindow.h
+@@ -53,6 +53,7 @@ namespace lsp
+                 private:
+                     friend class CocoaDisplay;
+                     NSWindow            *pCocoaWindow;
++                    NSView              *pCocoaParentView;              // Host's NSView slot when bWrapper=true
+                     CocoaCairoView      *pCocoaView;                    // The View of the window
+                     NSCursor            *pCocoaCursor;                  // The Cursor of the View
+                     NSWindow            *transientParent;
+diff --git a/src/main/cocoa/CocoaCairoView.mm b/src/main/cocoa/CocoaCairoView.mm
+index ad206a5..2381f4f 100644
+--- a/src/main/cocoa/CocoaCairoView.mm
++++ b/src/main/cocoa/CocoaCairoView.mm
+@@ -94,6 +94,7 @@ - (instancetype)initWithFrame:(NSRect)frameRect
+     self = [super initWithFrame:frameRect];
+     if (self)
+     {
++        [self setWantsLayer:YES];
+         //lsp_trace("Register event for view: %p", self);
+         NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+         [center addObserverForName:@"ForceExpose"
+diff --git a/src/main/cocoa/CocoaWindow.mm b/src/main/cocoa/CocoaWindow.mm
+index c6f1546..9217064 100644
+--- a/src/main/cocoa/CocoaWindow.mm
++++ b/src/main/cocoa/CocoaWindow.mm
+@@ -68,8 +68,10 @@
+                 enState                 = WS_NORMAL;
+ 
+                 bWrapper                = wrapper;
++                pCocoaParentView        = NULL;
+ 
+                 if (bWrapper) {
++                    pCocoaParentView = view;
+                     pCocoaWindow = [view window];
+                 }
+ 
+@@ -137,8 +139,9 @@
+                 }
+                 else
+                 {
+-                    CocoaCairoView *wrapperView = [[CocoaCairoView alloc] initWithFrame:[[pCocoaWindow contentView] bounds]];
+-                    [[pCocoaWindow contentView] addSubview:wrapperView positioned:NSWindowAbove relativeTo:nil];
++                    NSView *host = (pCocoaParentView != NULL) ? pCocoaParentView : [pCocoaWindow contentView];
++                    CocoaCairoView *wrapperView = [[CocoaCairoView alloc] initWithFrame:[host bounds]];
++                    [host addSubview:wrapperView positioned:NSWindowAbove relativeTo:nil];
+                     wrapperView.display = pCocoaDisplay;
+                     pCocoaView = wrapperView;
+                     [pCocoaView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
