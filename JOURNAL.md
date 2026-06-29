@@ -88,29 +88,84 @@ codesign --force --deep --sign - <bundle>.vst3
 
 Both this and the lipo step are baked into `merge-universal.sh`.
 
+### 5. After PR review and REAPER testing: lifecycle crashes + missing popup grab
+
+On the upstream `lsp-ws-lib` PR review pass — and after installing
+REAPER 7.75 to verify the fixes outside Ableton — three additional
+problems surfaced:
+
+1. **SIGSEGV in `-[CocoaCairoView triggerRedraw]` on FX-window
+   reopen.** The redraw `NSTimer` was scheduled with `target:self`,
+   so it retained the view. The view in turn retained the timer via
+   a strong property — a classic retain cycle. The view's `-dealloc`
+   never ran, so `-stopRedrawLoop` was never called, and the timer
+   kept firing past the lifetime of the `CocoaDisplay` it pointed
+   at. Easiest repro: open a `MENU` popup, close the FX window with
+   the red close button.
+
+2. **Popup widgets (`Menu`, `ComboBox`, `Fraction` dropdown) did
+   not close on outside click.** The cocoa backend left
+   `IWindow::grab_events` / `ungrab_events` /
+   `is_grabbing_events` unimplemented, so the widget framework had
+   no way to learn about clicks outside the popup's view bounds.
+   The X11 / Win backends use real protocol-level grabs
+   (`XGrabPointer`, `WH_MOUSE_LL`); macOS has no equivalent, so we
+   approximated it with `[NSEvent addLocalMonitorForEventsMatching
+   Mask:]` — the plug-in installs a mouse-down monitor into the
+   host's `NSApp`, and on a click outside any grabbing popup we
+   synthesize a `UIE_MOUSE_DOWN` at popup-local coords and dispatch
+   directly to the topmost grabbing window. The original event is
+   not consumed, so the host's chrome (e.g. the FX-window close
+   button) still receives the click while a popup is open.
+
+3. **Popup `CocoaWindow`s the framework doesn't explicitly
+   `destroy()`.** Defense in depth: `CocoaWindow::destroy()` now
+   force-stops the view timer and clears its `display` back-pointer
+   before releasing the view, and `CocoaDisplay::destroy()` does
+   the same pass over `vWindows` for orphaned popups left over at
+   plug-in teardown.
+
+Three more commits on the `fix/cocoa-vst3-embedded-ui` branch
+(`f80ff9d`, `ab1ebbb`, `f8abdbb`), bringing the PR total to seven.
+
+While here, the review also pointed out that the original PR was
+too bold in promoting aarch64-macOS to `F` in the support matrix
+(we still depend on `cairo` + `freetype` from brew rather than a
+native `quartz2d` backend, and there are no official builds). The
+upgrade was reverted to `E` in `f0152f6` on the docs PR; native
+`quartz2d` mirroring the Windows `Direct2D` backend is a natural
+follow-up task once this lands.
+
 ## What got published
 
 * This repo: the build scripts (`build-on-intel-mac.sh`,
   `merge-universal.sh`), the patch, and the README.
-* GitHub release: a built
-  [`LSP-Plugins-1.2.33-macos-universal.pkg`](https://github.com/lltwist/lsp-plugins-mac-build/releases/tag/v1.2.33).
-* Upstream PR to
-  [`lsp-plugins/lsp-ws-lib`](https://github.com/lsp-plugins/lsp-ws-lib)
-  with the four Cocoa fixes (Linux untouched, all changes inside
+* GitHub releases:
+  * [`v1.2.33`](https://github.com/lltwist/lsp-plugins-mac-build/releases/tag/v1.2.33)
+    — initial universal `.pkg` (the four original Cocoa fixes).
+  * [`v1.2.33-r2`](https://github.com/lltwist/lsp-plugins-mac-build/releases/tag/v1.2.33-r2)
+    — rebuild with the three additional fixes from section 5
+    (retain-cycle, grab, teardown). Same upstream tag, same .pkg
+    name; supersedes r1 for normal users, r1 is kept for rollback.
+* Upstream PR
+  [`lsp-plugins/lsp-ws-lib#6`](https://github.com/lsp-plugins/lsp-ws-lib/pull/6)
+  with the seven Cocoa fixes (Linux untouched, all changes inside
   `#ifdef PLATFORM_MACOSX`).
-* Upstream PR to
-  [`lsp-plugins/lsp-plugins`](https://github.com/lsp-plugins/lsp-plugins)
+* Upstream PR
+  [`lsp-plugins/lsp-plugins#637`](https://github.com/lsp-plugins/lsp-plugins/pull/637)
   documenting macOS install paths, brew deps, CLT 16.x quirk, the
   codesign-refresh recipe, and bumping the support matrix for
-  aarch64-macOS (E → F) and x86_64-macOS (U → E).
+  x86_64-macOS (U → E); aarch64-macOS stays at `E`.
 
 ## Tested
 
 * macOS 15.7.1 (Sequoia, arm64, MacBook Pro M1 Max) + Ableton Live
-  12.4.2 + universal `.pkg` → arm64 slice.
+  12.4.2 + REAPER 7.75 + universal `.pkg` → arm64 slice.
 * macOS 15.7.7 (Sequoia, Intel x86_64) + Ableton Live 11.0.12 +
-  universal `.pkg` → x86_64 slice.
+  REAPER 7.75 + universal `.pkg` → x86_64 slice.
 
-Compressor, EQ x8/x16, Limiter, Multiband, Impulse Reverb, Filter
-dropdowns, preset save/load popups, knob drags that travel outside
-the plug-in view — all functional on both architectures.
+Compressor, EQ x8/x16, Limiter, Multiband, Impulse Reverb, Noise
+Generator, Profiler, Phaser, Filter dropdowns, preset save/load
+popups, knob drags that travel outside the plug-in view, popup
+outside-click close, plug-in chains on the same track, open/close
+cycles of the FX window — all functional on both architectures.
