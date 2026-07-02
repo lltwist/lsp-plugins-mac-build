@@ -612,7 +612,7 @@ index c136abb..9080788 100644
              #ifdef USE_LIBFREETYPE
                  sFontManager.destroy();
 diff --git a/src/main/cocoa/CocoaWindow.mm b/src/main/cocoa/CocoaWindow.mm
-index c6f1546..a0ac994 100644
+index c6f1546..30a48df 100644
 --- a/src/main/cocoa/CocoaWindow.mm
 +++ b/src/main/cocoa/CocoaWindow.mm
 @@ -68,8 +68,10 @@
@@ -634,7 +634,19 @@ index c6f1546..a0ac994 100644
              }
  
              CocoaWindow::~CocoaWindow()
-@@ -118,6 +121,7 @@
+@@ -106,7 +109,10 @@
+                 {
+                     ssize_t screenWidth, screenHeight;
+                     pCocoaDisplay->screen_size(0, &screenWidth, &screenHeight);
+-                    NSRect frame = NSMakeRect(sSize.nLeft, screenHeight - sSize.nTop - sSize.nHeight + pCocoaDisplay->get_window_title_height(), sSize.nWidth, sSize.nHeight + pCocoaDisplay->get_window_title_height());    
++                    // Content rect only — initWithContentRect derives the frame from
++                    // the style mask. Inflating the height by the title height here
++                    // made the content taller than requested by exactly the title bar.
++                    NSRect frame = NSMakeRect(sSize.nLeft, screenHeight - sSize.nTop - sSize.nHeight, sSize.nWidth, sSize.nHeight);
+ 
+                     // Create a window
+                     NSWindow *window = [[NSWindow alloc]
+@@ -118,6 +124,7 @@
                                                  defer:NO];
  
                      pCocoaWindow = window;
@@ -642,7 +654,7 @@ index c6f1546..a0ac994 100644
                      [pCocoaWindow setIsVisible:NO];
  
                      // Create a cocoa view and set it to window
-@@ -137,8 +141,9 @@
+@@ -137,8 +144,9 @@
                  }
                  else
                  {
@@ -654,7 +666,7 @@ index c6f1546..a0ac994 100644
                      wrapperView.display = pCocoaDisplay;
                      pCocoaView = wrapperView;
                      [pCocoaView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-@@ -288,6 +293,13 @@
+@@ -288,6 +296,13 @@
  
              void CocoaWindow::destroy()
              {
@@ -668,7 +680,7 @@ index c6f1546..a0ac994 100644
                  if (bWrapper)
                  {
                      for (id token in viewObserverTokens)
-@@ -364,7 +376,74 @@
+@@ -364,7 +379,74 @@
                      return STATUS_BAD_STATE;
  
                  bInvalidate = true;
@@ -744,7 +756,7 @@ index c6f1546..a0ac994 100644
                  return STATUS_OK;
              }
  
-@@ -667,10 +746,18 @@
+@@ -667,10 +749,18 @@
          
              status_t CocoaWindow::update_window_hints()
              {
@@ -764,7 +776,7 @@ index c6f1546..a0ac994 100644
                  ws::size_limit_t c;
                  status_t res = get_actual_size_constraints(&c);
                  if (res != STATUS_OK)
-@@ -717,12 +804,9 @@
+@@ -717,12 +807,9 @@
  
              status_t CocoaWindow::set_geometry(const rectangle_t *realize)
              {
@@ -779,7 +791,7 @@ index c6f1546..a0ac994 100644
                  rectangle_t old = sSize;
  
                  sSize.nLeft = realize->nLeft;
-@@ -735,25 +819,72 @@
+@@ -735,25 +822,78 @@
                      (old.nWidth == sSize.nWidth) &&
                      (old.nHeight == sSize.nHeight))
                      return STATUS_OK;
@@ -841,11 +853,18 @@ index c6f1546..a0ac994 100644
                  ssize_t screenWidth, screenHeight;
                  pCocoaDisplay->screen_size(0, &screenWidth, &screenHeight);
  
-                 NSRect contentRect = NSMakeRect(sSize.nLeft, screenHeight - sSize.nTop - sSize.nHeight + pCocoaDisplay->get_window_title_height(), sSize.nWidth, sSize.nHeight);
+-                NSRect contentRect = NSMakeRect(sSize.nLeft, screenHeight - sSize.nTop - sSize.nHeight + pCocoaDisplay->get_window_title_height(), sSize.nWidth, sSize.nHeight);
 -                NSRect frameRect = [[pCocoaView window] frameRectForContentRect:contentRect];
 -            
 -                [[pCocoaView window] setFrame:frameRect display:YES animate:NO];
 -                NSRect newContentBounds = [[pCocoaView window] contentView].bounds;
++                // sSize positions the CONTENT (client area) in top-origin screen
++                // coordinates; frameRectForContentRect adds whatever chrome the window
++                // style actually has. Do NOT add the display's global title-height
++                // fudge here: for borderless windows (menus, combo popups) there is no
++                // chrome to compensate, and the fudge made every popup appear one
++                // title-bar height ABOVE the requested point.
++                NSRect contentRect = NSMakeRect(sSize.nLeft, screenHeight - sSize.nTop - sSize.nHeight, sSize.nWidth, sSize.nHeight);
 +                NSRect frameRect = [window frameRectForContentRect:contentRect];
 +
 +                [window setFrame:frameRect display:YES animate:NO];
@@ -860,7 +879,7 @@ index c6f1546..a0ac994 100644
                  if (pSurface != nullptr)
                  {
                      pSurface->resize(sSize.nWidth, sSize.nHeight);
-@@ -780,16 +911,6 @@
+@@ -780,16 +920,6 @@
                  transientParent = nil;
                  commit_border_style(enBorderStyle, nActions);
  
@@ -877,7 +896,7 @@ index c6f1546..a0ac994 100644
                  if (!has_parent())
                  {
                      if (over != nullptr)
-@@ -804,7 +925,8 @@
+@@ -804,7 +934,8 @@
                  }
  
                  //[pCocoaWindow orderFrontRegardless];
@@ -887,7 +906,7 @@ index c6f1546..a0ac994 100644
  
                  // Simulate missing show event
                  lsp_trace("Emitting UIE_SHOW event");
-@@ -812,7 +934,32 @@
+@@ -812,7 +943,32 @@
                  init_event(&ue);
                  ue.nType       = UIE_SHOW;
                  handle_event(&ue);
@@ -921,7 +940,7 @@ index c6f1546..a0ac994 100644
                  // Invalidate window contents for redraw
                  invalidate();
  
-@@ -874,6 +1021,29 @@
+@@ -874,6 +1030,29 @@
              {
                  if (realize == nullptr)
                      return STATUS_BAD_ARGUMENTS;
@@ -951,7 +970,21 @@ index c6f1546..a0ac994 100644
                  if (pCocoaWindow == nil)
                      return STATUS_BAD_STATE;
  
-@@ -892,10 +1062,31 @@
+@@ -883,8 +1062,12 @@
+                 ssize_t screenWidth, screenHeight;
+                 pCocoaDisplay->screen_size(0, &screenWidth, &screenHeight);
+ 
++                // Content occupies the bottom part of the frame (title chrome, if
++                // any, sits above it), so the content's top-origin Y is simply
++                // screenH - (frame bottom + content height). Mirrors set_geometry(),
++                // which positions the content rect without a title-height fudge.
+                 realize->nLeft   = static_cast<ssize_t>(frame.origin.x);
+-                realize->nTop    = static_cast<ssize_t>(screenHeight - frame.origin.y - cFrame.size.height + pCocoaDisplay->get_window_title_height() /*frame.origin.y*/);
++                realize->nTop    = static_cast<ssize_t>(screenHeight - frame.origin.y - cFrame.size.height);
+                 realize->nWidth  = static_cast<ssize_t>(cFrame.size.width);
+                 realize->nHeight = static_cast<ssize_t>(cFrame.size.height);
+ 
+@@ -892,10 +1075,31 @@
              }
  
              void *CocoaWindow::handle()
@@ -984,7 +1017,7 @@ index c6f1546..a0ac994 100644
              //TODO: we need to map all events, and handle create_surface
              status_t CocoaWindow::handle_event(const event_t *ev)
              {
-@@ -917,8 +1108,6 @@
+@@ -917,8 +1121,6 @@
  
                          drop_surface();
                          pSurface = create_surface(pCocoaDisplay, pCocoaView, sSize.nWidth, sSize.nHeight);
@@ -993,7 +1026,7 @@ index c6f1546..a0ac994 100644
                          break;
                      }
  
-@@ -927,7 +1116,6 @@
+@@ -927,7 +1129,6 @@
                          bVisible = false;
                          //if (bWrapper) break;
  
@@ -1001,7 +1034,7 @@ index c6f1546..a0ac994 100644
                          drop_surface();
                          break;
                      }
-@@ -946,7 +1134,10 @@
+@@ -946,7 +1147,10 @@
                      case UIE_RESIZE:
                      {
                          lsp_trace("Resize event: {l=%d, t=%d, w=%d, h=%d}", int(ev->nLeft), int(ev->nTop), int(ev->nWidth), int(ev->nHeight));
@@ -1013,7 +1046,7 @@ index c6f1546..a0ac994 100644
  
                          sSize.nLeft = ev->nLeft;
                          sSize.nTop = ev->nTop;
-@@ -1057,11 +1248,33 @@
+@@ -1057,11 +1261,33 @@
  
              ssize_t CocoaWindow::left()
              {
