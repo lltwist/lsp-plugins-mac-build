@@ -253,14 +253,33 @@ purged), `MENU → Scaling` converges in a single
 directions, no ping-pong, no ratchet, FX open/close cycles clean,
 "Default" scale = 100 %, bottom-bar scaling popups open on-screen.
 
+A sixth fix rode along after popup testing: the **title-height fudge
+in geometry conversions**. `set_geometry()` added the display's
+global title height to the Y flip, but borderless popups (menus,
+combo dropdowns) have no chrome for `frameRectForContentRect:` to
+compensate — every popup opened one title-bar height above the
+requested point (sadko4u's remark (4) on PR #6). `init()`
+additionally inflated the content height by the title height (the
+"clipped bottom status line" seen earlier). Removing the fudge from
+`set_geometry` / `get_absolute_geometry` / `init` also made the
+"FX window position resets to (0,0)" observation from the PR #6
+review stop reproducing.
+
 The changes live in two patches now:
 `patches/lsp-ws-lib-cocoa-ui-fix.patch` (base `1.2.33`, includes the
 seven merged PR #6 fixes + redraw-tick refactor + this) and
 `patches/lsp-plugin-fw-vst3-macos-fixes.patch` (base `1.0.38`:
 `canResize` + `setContentScaleFactor`), both applied by
-`build-on-intel-mac.sh`. Still to do: Ableton re-check on both
-arches, then upstream PRs (`lsp-ws-lib` on top of `devel` post-#6,
-new `lsp-plugin-fw` PR).
+`build-on-intel-mac.sh`. Verified in REAPER 7.75 and Ableton Live 12
+on arm64. Upstream PRs filed:
+[`lsp-ws-lib#7`](https://github.com/lsp-plugins/lsp-ws-lib/pull/7)
+(two commits on `devel`) and
+[`lsp-plugin-fw#16`](https://github.com/lsp-plugins/lsp-plugin-fw/pull/16).
+
+Still open from the PR #6 review: screen-fit at the "Default" macOS
+display-scaling mode (logical-pixel mismatch, needs
+`backingScaleFactor` + `visibleFrame` reflow) and hover tooltips
+never appearing in the cocoa backend.
 
 ## Upstream status (as of 2026-07-02)
 
@@ -269,8 +288,8 @@ new `lsp-plugin-fw` PR).
 | Cocoa VST3 embedded UI (8 commits) | `lsp-plugins/lsp-ws-lib` PR #6 | **merged** into `devel` on 2026-06-30 |
 | AVX2/AVX-512 asm fix on Intel macOS | `lsp-plugins/lsp-dsp-lib` issue #24 | **merged** into `devel` on 2026-07-01 |
 | macOS README (paths, brew, CLT quirk, codesign) | `lsp-plugins/lsp-plugins` PR #637 | open, waiting on merge |
-| Cocoa VST3 embedded resize/scaling overhaul (5 root causes) | `lsp-plugins/lsp-ws-lib` | local patch — verified in REAPER 7.75 arm64; pending Ableton re-check + new PR |
-| VST3 macOS: no host live-resize, ignore Retina content scale | `lsp-plugins/lsp-plugin-fw` | local patch — verified in REAPER 7.75 arm64; pending Ableton re-check + new PR |
+| Cocoa VST3 embedded geometry (resize/scaling, popup placement) | `lsp-plugins/lsp-ws-lib` PR #7 | open — verified in REAPER 7.75 + Ableton Live 12 (arm64) |
+| VST3 macOS: no host live-resize, ignore Retina content scale | `lsp-plugins/lsp-plugin-fw` PR #16 | open — verified in REAPER 7.75 + Ableton Live 12 (arm64) |
 
 Once a new upstream release tag ships that includes these three
 merges, the downstream mac-build here can bump `GIT_TAG` and drop
