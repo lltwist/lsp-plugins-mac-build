@@ -136,6 +136,64 @@ upgrade was reverted to `E` in `f0152f6` on the docs PR; native
 `quartz2d` mirroring the Windows `Direct2D` backend is a natural
 follow-up task once this lands.
 
+### 6. Upstream merges (2026-06-30 to 2026-07-01)
+
+- **lsp-ws-lib PR #6 merged into `devel` on 2026-06-30 by @sadko4u.**
+  Before merging, sadko4u suggested a cleaner shape for the redraw
+  path: instead of a per-view `NSTimer` plus proxy, own a single
+  60 Hz tick on `CocoaDisplay` and dispatch redraws to registered
+  windows from there. Implemented that as an 8th commit
+  (`81f07cc refactor(cocoa): own redraw tick on CocoaDisplay, drop
+  per-view NSTimer`), which also lets `CocoaWindow::destroy()` and
+  `CocoaDisplay::destroy()` drop the earlier defensive stop-timer
+  passes. CHANGELOG on `devel` now credits the contribution to
+  `lltwist`.
+
+- **lsp-dsp-lib AVX2/AVX-512 asm rejection filed as
+  [lsp-plugins/lsp-dsp-lib#24](https://github.com/lsp-plugins/lsp-dsp-lib/issues/24)**
+  with a reproducer on Intel Sequoia + Apple clang 17. sadko4u
+  turned it around fast: rewrote `lanczos.h` inline-asm to use
+  plain `0xN(%[memOp])` operand forms instead of `0xN + %[memOp]`
+  arithmetic, pushed to branch `github-issue-24`, then merged to
+  `devel` on 2026-07-01. Verified clean build on both Intel and
+  Apple Silicon before confirming. Once a new upstream release
+  ships with these commits, the avx2/avx512 stubs baked into
+  `build-on-intel-mac.sh` can be dropped and AVX code paths turned
+  back on for Intel Mac users.
+
+- **lsp-plugins docs PR #637 still open.** Support matrix currently
+  shows `E` for both `aarch64` and `x86_64` on the macOS column
+  (matches sadko4u's ask); waiting on merge from his side.
+
+- **Resize investigation.** Also tried to plug the REAPER-only
+  embedded resize bug (host frame drag stretches/clips the plug-in
+  UI). Hooked `-setFrameSize:` on `CocoaCairoView` to emit
+  `UIE_RESIZE` so `pSurface` gets recreated, which worked, but the
+  widget framework's `Window::UIE_RESIZE` handler then loops back
+  through `CocoaWindow::set_geometry()` and calls
+  `[[pCocoaView window] setFrame: animate:NO]` at the framework's
+  preferred size — in embedded mode `[pCocoaView window]` is the
+  host NSWindow, so the framework kept shoving the view back to its
+  original size. The ping-pong is visible cleanly in the logs
+  (`951×551 → 944×548 → 951×551`). Rolled the prototype back rather
+  than ship half-working; captured the finding in the PR comment as
+  a follow-up item. Ableton doesn't expose the FX-panel resize
+  handle so users hit the in-plug-in `MENU → Scaling` control
+  instead and it "just works" there.
+
+## Upstream status (as of 2026-07-02)
+
+| Change | Upstream repo | Status |
+| --- | --- | --- |
+| Cocoa VST3 embedded UI (8 commits) | `lsp-plugins/lsp-ws-lib` PR #6 | **merged** into `devel` on 2026-06-30 |
+| AVX2/AVX-512 asm fix on Intel macOS | `lsp-plugins/lsp-dsp-lib` issue #24 | **merged** into `devel` on 2026-07-01 |
+| macOS README (paths, brew, CLT quirk, codesign) | `lsp-plugins/lsp-plugins` PR #637 | open, waiting on merge |
+
+Once a new upstream release tag ships that includes these three
+merges, the downstream mac-build here can bump `GIT_TAG` and drop
+the local `patches/lsp-ws-lib-cocoa-ui-fix.patch` and the
+`avx2.cpp` / `avx512.cpp` stub logic in `build-on-intel-mac.sh`.
+
 ## What got published
 
 * This repo: the build scripts (`build-on-intel-mac.sh`,
