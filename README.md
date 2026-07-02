@@ -63,6 +63,7 @@ On the **arm64 Mac**:
 git clone https://github.com/lsp-plugins/lsp-plugins.git --recursive
 cd lsp-plugins
 git -C modules/lsp-ws-lib apply ../../../patches/lsp-ws-lib-cocoa-ui-fix.patch
+git -C modules/lsp-plugin-fw apply ../../../patches/lsp-plugin-fw-vst3-macos-fixes.patch
 brew install make pkgconf cairo freetype libsndfile expat
 gmake clean && gmake config FEATURES="vst3 ui" && gmake fetch && gmake
 gmake install DESTDIR=/path/to/_staged-arm64-saved
@@ -83,7 +84,8 @@ Copy that tar back to the arm64 Mac, extract it into
 | `build-on-intel-mac.sh` | Drives the x86_64 build on an Intel Mac. Applies the Cocoa UI patch, stubs AVX2/AVX-512 (Apple clang can't assemble LSP's inline asm), and handles the CLT 16.x libc++ header path issue. |
 | `merge-universal.sh` | `lipo`-merges the arm64 and x86_64 slices, ad-hoc signs the bundle (resign is mandatory after `lipo`, otherwise hosts reject it with "code has no resources but signature indicates they must be present"), and packages a `.pkg`. |
 | `make-pkg.sh` | Older variant that builds a `.pkg` from `build-arm64/` and `build-x86_64/` produced manually. Kept for reference; prefer `merge-universal.sh`. |
-| `patches/lsp-ws-lib-cocoa-ui-fix.patch` | Four-commit patch against `lsp-ws-lib`. Same content as the upstream PR (link below); once merged this becomes unnecessary. |
+| `patches/lsp-ws-lib-cocoa-ui-fix.patch` | Cocoa UI patch against `lsp-ws-lib` (base `1.2.33`): the seven merged PR #6 fixes, the display-owned redraw tick, and the embedded resize/scaling overhaul. |
+| `patches/lsp-plugin-fw-vst3-macos-fixes.patch` | VST3 wrapper patch against `lsp-plugin-fw`: report the view as non-resizable on macOS (no host live-resize) and ignore the Retina content-scale factor (it is a backing ratio, not a UI zoom). |
 
 ## Upstream status
 

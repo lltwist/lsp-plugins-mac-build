@@ -10,3 +10,4 @@ build-universal/
 *.tar.gz
 *.dmg
 .DS_Store
+_staged-resize-test/

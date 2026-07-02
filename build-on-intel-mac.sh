@@ -9,6 +9,7 @@ WORK="${WORK:-$HOME/lsp-build-x86}"
 GIT_TAG="${GIT_TAG:-1.2.33}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCH="$SCRIPT_DIR/patches/lsp-ws-lib-cocoa-ui-fix.patch"
+FW_PATCH="$SCRIPT_DIR/patches/lsp-plugin-fw-vst3-macos-fixes.patch"
 
 echo "==> work dir: $WORK"
 mkdir -p "$WORK"
@@ -59,6 +60,20 @@ if [ -f "$PATCH" ]; then
   cd ../..
 else
   echo "WARN: patch $PATCH not found, UI will be broken in Ableton"
+fi
+
+if [ -f "$FW_PATCH" ]; then
+  echo "==> applying VST3 wrapper macOS patch (no host live-resize, ignore Retina content scale)"
+  cd modules/lsp-plugin-fw
+  if git apply --check "$FW_PATCH" 2>/dev/null; then
+    git apply "$FW_PATCH"
+    echo "    patch applied"
+  else
+    echo "    patch already applied or does not match — skipping"
+  fi
+  cd ../..
+else
+  echo "WARN: patch $FW_PATCH not found — window will open at 200% on Retina and scaling menu will misbehave"
 fi
 
 echo "==> replacing avx2.cpp and avx512.cpp with stubs (LSP inline asm is rejected by Apple's assembler)"

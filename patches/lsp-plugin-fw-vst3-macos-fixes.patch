@@ -1,0 +1,43 @@
+diff --git a/include/lsp-plug.in/plug-fw/wrap/vst3/impl/ui_wrapper.h b/include/lsp-plug.in/plug-fw/wrap/vst3/impl/ui_wrapper.h
+index aeaf4f05..0825f5c7 100644
+--- a/include/lsp-plug.in/plug-fw/wrap/vst3/impl/ui_wrapper.h
++++ b/include/lsp-plug.in/plug-fw/wrap/vst3/impl/ui_wrapper.h
+@@ -764,7 +764,16 @@ namespace lsp
+ 
+         Steinberg::tresult PLUGIN_API UIWrapper::canResize()
+         {
++        #ifdef PLATFORM_MACOSX
++            // The Cocoa backend does not support host-driven live resize of the
++            // embedded view (the widget framework re-layout path is only driven by
++            // plug-in-initiated resizes). Report the view as non-resizable so hosts
++            // (e.g. REAPER) do not offer a resize frame; plug-in-initiated resizes
++            // via IPlugFrame::resizeView (UI scaling menu) keep working.
++            return Steinberg::kResultFalse;
++        #else
+             return Steinberg::kResultTrue;
++        #endif
+         }
+ 
+         Steinberg::tresult PLUGIN_API UIWrapper::checkSizeConstraint(Steinberg::ViewRect *rect)
+@@ -810,11 +819,21 @@ namespace lsp
+         Steinberg::tresult PLUGIN_API UIWrapper::setContentScaleFactor(Steinberg::IPlugViewContentScaleSupport::ScaleFactor factor)
+         {
+             lsp_trace("this=%p, factor=%f", this, factor);
++
++        #ifdef PLATFORM_MACOSX
++            // On macOS the content scale factor communicates the HiDPI (Retina)
++            // backing ratio (2.0 on Retina displays), not a desired logical UI
++            // zoom: AppKit views are laid out in points and the backing scale is
++            // handled transparently by the system. Treating it as a UI scaling
++            // override doubles the window size on Retina Macs (the "default"
++            // scale becomes 200% and the window grows beyond the screen).
++        #else
+             fScalingFactor = factor * 100.0f;
+ 
+             ctl::PluginWindow *wnd = ctl::ctl_cast<ctl::PluginWindow>(pWindow);
+             if (wnd != NULL)
+                 wnd->host_scaling_changed();
++        #endif
+ 
+             return Steinberg::kResultOk;
+         }
