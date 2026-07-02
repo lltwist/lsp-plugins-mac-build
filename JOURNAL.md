@@ -181,6 +181,87 @@ follow-up task once this lands.
   handle so users hit the in-plug-in `MENU → Scaling` control
   instead and it "just works" there.
 
+### 7. Embedded resize / scaling overhaul (2026-07-02)
+
+Took another run at the REAPER resize follow-up. Direction changed
+along the way (agreed with the user): instead of adaptive host-drag
+resize, adopt the **Ableton model** — the embedded view is fixed-size,
+all size changes are plug-in-initiated via `MENU → Scaling` →
+`IPlugFrame::resizeView`, and host live-resize is declined.
+
+Root causes found (each one produced its own broken build during
+testing; logs captured by launching REAPER from a pty and NSLog
+tracing):
+
+1. **`bWrapper` is FALSE in VST3 hosted mode.** The plug-in window is
+   created via `create_window()` and only becomes embedded later when
+   `IPlugView::attached()` → `set_parent()` reparents the view into
+   the host's slot NSView. Any "embedded" logic keyed on `bWrapper`
+   silently never ran. The correct discriminator is
+   `pCocoaParentView != nil`.
+
+2. **`set_geometry()` resized the host's NSWindow.** In embedded mode
+   `[pCocoaView window]` is the host FX window; driving it from the
+   plug-in violates the VST3 geometry contract and produced the
+   `951 → 944 → 951` ping-pong. Now: embedded `set_geometry()` sizes
+   only our subview + cairo surface, then emits `UIE_RESIZE` to the
+   tk handler for re-layout; the host window is never touched.
+
+3. **`update_window_hints()` set `contentMin/MaxSize` on the host
+   window.** REAPER's FX window content = plug-in view + 392×284 of
+   REAPER chrome (sidebar/toolbars). Clamping the host window content
+   to the view size ratcheted the window by exactly +392×+284 per
+   resize round-trip until it outgrew the screen. Embedded mode now
+   never touches host window size hints.
+
+4. **`get_absolute_geometry()` reported the (stale) host slot size.**
+   `slot_ui_resize` in the VST3 wrapper reads this rectangle and
+   passes it to `resizeView` — so scaling asked the host for the size
+   it already had, and the FX window never followed `MENU → Scaling`.
+   Embedded mode now reports origin-from-slot + size-from-`sSize`.
+
+5. **Retina content-scale treated as UI zoom.** REAPER calls
+   `setContentScaleFactor(2.0)` on HiDPI; the wrapper stored it as a
+   200 % scaling override, so "Default" scale opened the window at
+   double size (beyond the screen — which also pushed the scaling
+   submenu off-screen, making it look broken). On macOS this factor
+   is the backing ratio, already handled by AppKit; it is now ignored
+   (`#ifdef PLATFORM_MACOSX` in `setContentScaleFactor`).
+
+Supporting changes: `CocoaWindow::show()` asserts OUR size to the
+host right after `UIE_SHOW` (tk must be mapped for `UIE_RESIZE` to
+be processed — emitting earlier gets dropped): the emitted
+`UIE_RESIZE` fires tk `SLOT_RESIZE`, the VST3 wrapper turns it into
+`resizeView`, and the host sizes its slot to the plug-in layout.
+This deliberately does NOT adopt the host slot size — an earlier
+adopt-the-slot variant faithfully inherited the garbage FX-window
+size REAPER had remembered from the ratchet-era sessions (opening
+"full screen" with a stretched layout, and pushing the bottom-bar
+scaling popup off-screen, which made it look like the menu did not
+open). A `NSViewFrameDidChangeNotification` observer on the slot
+view follows host-applied resizes (`resizeView` confirmations);
+`canResize()` returns `kResultFalse` on macOS so hosts treat the
+view as fixed-size. REAPER's own FX window frame stays
+user-resizable (that's REAPER chrome, not ours) — dragging it
+crops/letterboxes the fixed view, same as any fixed-size VST3
+there, and the next FX-window open snaps back to the correct size.
+
+Verified in REAPER 7.75 (arm64, live log trace): opens at the
+layout size at the current scaling (stale host-remembered sizes
+purged), `MENU → Scaling` converges in a single
+`set_geometry` ↔ `slot frame changed` round-trip in both
+directions, no ping-pong, no ratchet, FX open/close cycles clean,
+"Default" scale = 100 %, bottom-bar scaling popups open on-screen.
+
+The changes live in two patches now:
+`patches/lsp-ws-lib-cocoa-ui-fix.patch` (base `1.2.33`, includes the
+seven merged PR #6 fixes + redraw-tick refactor + this) and
+`patches/lsp-plugin-fw-vst3-macos-fixes.patch` (base `1.0.38`:
+`canResize` + `setContentScaleFactor`), both applied by
+`build-on-intel-mac.sh`. Still to do: Ableton re-check on both
+arches, then upstream PRs (`lsp-ws-lib` on top of `devel` post-#6,
+new `lsp-plugin-fw` PR).
+
 ## Upstream status (as of 2026-07-02)
 
 | Change | Upstream repo | Status |
@@ -188,6 +269,8 @@ follow-up task once this lands.
 | Cocoa VST3 embedded UI (8 commits) | `lsp-plugins/lsp-ws-lib` PR #6 | **merged** into `devel` on 2026-06-30 |
 | AVX2/AVX-512 asm fix on Intel macOS | `lsp-plugins/lsp-dsp-lib` issue #24 | **merged** into `devel` on 2026-07-01 |
 | macOS README (paths, brew, CLT quirk, codesign) | `lsp-plugins/lsp-plugins` PR #637 | open, waiting on merge |
+| Cocoa VST3 embedded resize/scaling overhaul (5 root causes) | `lsp-plugins/lsp-ws-lib` | local patch — verified in REAPER 7.75 arm64; pending Ableton re-check + new PR |
+| VST3 macOS: no host live-resize, ignore Retina content scale | `lsp-plugins/lsp-plugin-fw` | local patch — verified in REAPER 7.75 arm64; pending Ableton re-check + new PR |
 
 Once a new upstream release tag ships that includes these three
 merges, the downstream mac-build here can bump `GIT_TAG` and drop
