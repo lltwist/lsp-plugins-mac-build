@@ -12,14 +12,16 @@ The community macOS packaging at
 produces an arm64-only `.pkg`, which is fine on Apple Silicon Macs
 but does not load on Intel hosts (Ableton Live 11 etc.).
 
-On Sequoia, the Cocoa backend in `lsp-ws-lib` (added 2025) has four
-bugs that together make every LSP VST3 plug-in show a blank window
-and ignore mouse input in any host. See the upstream PRs below.
+On Sequoia, the Cocoa backend in `lsp-ws-lib` (added 2025) had a
+series of bugs that made every LSP VST3 plug-in show a blank window,
+ignore mouse input, misplace popups and misbehave on window resize
+and on Retina displays. See the upstream PRs below.
 
 This repo:
 
-* Patches `lsp-ws-lib` with the four Cocoa fixes (pending upstream).
-* Builds an x86_64 slice on an Intel Mac (no cross-compile from arm —
+* Patches `lsp-ws-lib` and `lsp-plugin-fw` with the macOS fixes
+  (partially merged upstream, the rest is pending review).
+* Builds an x86_64 slice on an Intel Mac (no cross-compile from arm:
   brew on Apple Silicon has no x86_64 bottles for cairo/freetype, and
   LSP's `lsp-dsp-lib` ships AVX2/AVX-512 inline asm in GCC-AT&T syntax
   that Apple's clang IAS rejects; both are sidestepped here).
@@ -33,9 +35,9 @@ bundle containing ~190 LSP VST3 plug-ins (Compressor, EQ, Multiband,
 Impulse Reverb, Dynamics, Limiter, Filters, etc.).
 
 The bundle is ad-hoc signed (Developer-ID signing requires an Apple
-account). Gatekeeper will refuse the `.pkg` the first time — open it
-once, dismiss the warning, then System Settings → Privacy & Security
-→ "Allow Anyway" → re-open the `.pkg`.
+account). Gatekeeper will refuse the `.pkg` the first time: open it
+once, dismiss the warning, then System Settings > Privacy & Security >
+"Allow Anyway", and re-open the `.pkg`.
 
 ## Quick install
 
@@ -70,7 +72,7 @@ gmake install DESTDIR=/path/to/_staged-arm64-saved
 ```
 
 On the **Intel Mac**, run `./build-on-intel-mac.sh`. It does the
-clone, applies the same patch, stubs out the AVX2/AVX-512 translation
+clone, applies both patches, stubs out the AVX2/AVX-512 translation
 units, and produces `~/lsp-build-x86/lsp-plugins-macos-x86_64.tar.gz`.
 
 Copy that tar back to the arm64 Mac, extract it into
@@ -85,34 +87,42 @@ Copy that tar back to the arm64 Mac, extract it into
 | `merge-universal.sh` | `lipo`-merges the arm64 and x86_64 slices, ad-hoc signs the bundle (resign is mandatory after `lipo`, otherwise hosts reject it with "code has no resources but signature indicates they must be present"), and packages a `.pkg`. |
 | `make-pkg.sh` | Older variant that builds a `.pkg` from `build-arm64/` and `build-x86_64/` produced manually. Kept for reference; prefer `merge-universal.sh`. |
 | `patches/lsp-ws-lib-cocoa-ui-fix.patch` | Cocoa UI patch against `lsp-ws-lib` (base `1.2.33`): the seven merged PR #6 fixes, the display-owned redraw tick, and the embedded resize/scaling overhaul. |
-| `patches/lsp-plugin-fw-vst3-macos-fixes.patch` | VST3 wrapper patch against `lsp-plugin-fw`: report the view as non-resizable on macOS (no host live-resize) and ignore the Retina content-scale factor (it is a backing ratio, not a UI zoom). |
+| `patches/lsp-plugin-fw-vst3-macos-fixes.patch` | VST3 wrapper patch against `lsp-plugin-fw`: correct the host content scale factor by the display backing scale (on Retina hosts report 2.0, which is a pixel ratio, not a UI zoom). |
 
 ## Upstream status
 
-* **`lsp-plugins/lsp-ws-lib` PR** — Cocoa rendering / mouse routing
-  fixes (the meat of the work). When merged, the patch in `patches/`
-  becomes a no-op and `build-on-intel-mac.sh` will skip it
-  automatically.
-* **`lsp-plugins/lsp-plugins` PR** — README updates for macOS install
-  paths, brew deps, CLT 16.x quirk, codesign refresh recipe, and a
-  support-matrix bump.
-* **`lsp-plugins/lsp-dsp-lib`** — the AVX2 / AVX-512 inline-asm syntax
-  problem is not in any PR; the stubs in `build-on-intel-mac.sh` are
-  a workaround. An asm-template fix in `lsp-dsp-lib` would let Intel
-  macOS use the SIMD-accelerated paths.
+* [`lsp-ws-lib#6`](https://github.com/lsp-plugins/lsp-ws-lib/pull/6),
+  Cocoa rendering / mouse routing / popup and lifecycle fixes: merged
+  into `devel`.
+* [`lsp-ws-lib#7`](https://github.com/lsp-plugins/lsp-ws-lib/pull/7),
+  embedded window geometry, live resize, popup placement: open.
+* [`lsp-plugin-fw#16`](https://github.com/lsp-plugins/lsp-plugin-fw/pull/16),
+  HiDPI content scale correction: open.
+* [`lsp-plugins#637`](https://github.com/lsp-plugins/lsp-plugins/pull/637),
+  macOS build/install docs: open.
+* `lsp-dsp-lib` AVX2/AVX-512 inline-asm rejection on Apple clang:
+  fixed upstream via
+  [issue #24](https://github.com/lsp-plugins/lsp-dsp-lib/issues/24),
+  merged into `devel`. Until a release tag ships it, the stubs in
+  `build-on-intel-mac.sh` stay and Intel macOS uses scalar/SSE paths.
+
+Once a new upstream release contains all of the above, the patches in
+`patches/` become no-ops (the build script skips them automatically)
+and the AVX stubs can be dropped.
 
 ## Tested
 
-* macOS 15.7.1 (Sequoia, arm64) + Ableton Live 12.4.2
-* macOS 15.7.7 (Sequoia, Intel x86_64) + Ableton Live 11.0.12
+* macOS 15.7 (Sequoia, arm64) + Ableton Live 12.4.2 + REAPER 7.75
+* macOS 15.7.7 (Sequoia, Intel x86_64) + Ableton Live 11.0.12 + REAPER 7.75
 
 Compressor, EQ x8/x16, Limiter, Multiband, Impulse Reverb, Filter
 with all dropdowns, knob drags that travel outside the plug-in
-window, preset save/load popups — all functional.
+window, preset save/load popups, live FX-window resize in REAPER,
+UI scaling menu with correct 100% default on Retina displays.
 
 ## License
 
-Build scripts: WTFPL / public domain — do whatever.
+Build scripts: WTFPL / public domain, do whatever.
 
 The plug-ins themselves are LGPL-3.0
 ([lsp-plugins/lsp-plugins](https://github.com/lsp-plugins/lsp-plugins)).
