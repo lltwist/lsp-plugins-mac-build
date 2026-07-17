@@ -1,8 +1,8 @@
 diff --git a/include/private/cocoa/CocoaCairoView.h b/include/private/cocoa/CocoaCairoView.h
-index d2939a1..5a62753 100644
+index d2939a1..8d6fb15 100644
 --- a/include/private/cocoa/CocoaCairoView.h
 +++ b/include/private/cocoa/CocoaCairoView.h
-@@ -31,21 +31,17 @@
+@@ -31,21 +31,18 @@
  
  #import <Cocoa/Cocoa.h>
  
@@ -11,6 +11,7 @@ index d2939a1..5a62753 100644
  
      @property (assign) cairo_surface_t *imageSurface;
 -    @property (strong) NSTimer *redrawTimer;
++    @property (assign) CGImageRef lastImage;    // Last rendered frame, redrawn when no fresh surface is available (live resize)
      @property (strong) NSCursor *nextCursor;
      @property (assign) bool needsRedrawing;
      @property (nonatomic, assign) lsp::ws::cocoa::CocoaDisplay *display;
@@ -112,10 +113,40 @@ index e8b74a3..8bc58ac 100644
          } /* namespace cocoa */
      } /* namespace ws */
 diff --git a/src/main/cocoa/CocoaCairoView.mm b/src/main/cocoa/CocoaCairoView.mm
-index ad206a5..a6241cf 100644
+index ad206a5..2669997 100644
 --- a/src/main/cocoa/CocoaCairoView.mm
 +++ b/src/main/cocoa/CocoaCairoView.mm
-@@ -94,6 +94,8 @@ - (instancetype)initWithFrame:(NSRect)frameRect
+@@ -63,11 +63,27 @@ - (void)drawRect:(NSRect)dirtyRect {
+ 
+         CGContextRestoreGState(context);
+ 
+-        CGImageRelease(image);
++        // Keep the frame: during a live host resize AppKit redraws the view on
++        // every frame change, usually before the widget framework has produced
++        // a surface for the new size — without a cached frame the view flashes
++        // its background (black) until the next redraw tick.
++        if (self->_lastImage != NULL)
++            CGImageRelease(self->_lastImage);
++        self->_lastImage = image;
+ 
+         cairo_surface_destroy(self->_imageSurface);
+         self->_imageSurface = NULL;
+-    } 
++    }
++    else if (self->_lastImage != NULL)
++    {
++        // No fresh frame yet — stretch the previous one over the current bounds
++        CGContextRef context = [[NSGraphicsContext currentContext] CGContext];
++        CGContextSaveGState(context);
++        CGContextTranslateCTM(context, 0, self.bounds.size.height);
++        CGContextScaleCTM(context, 1, -1);
++        CGContextDrawImage(context, CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height), self->_lastImage);
++        CGContextRestoreGState(context);
++    }
+     
+     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+     [center postNotificationName:@"RedrawRequest"
+@@ -94,6 +110,8 @@ - (instancetype)initWithFrame:(NSRect)frameRect
      self = [super initWithFrame:frameRect];
      if (self)
      {
@@ -124,7 +155,7 @@ index ad206a5..a6241cf 100644
          //lsp_trace("Register event for view: %p", self);
          NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
          [center addObserverForName:@"ForceExpose"
-@@ -139,34 +141,9 @@ - (CGImageRef)renderCairoImage
+@@ -139,36 +157,17 @@ - (CGImageRef)renderCairoImage
      return image;
  }
  
@@ -158,8 +189,16 @@ index ad206a5..a6241cf 100644
 -    [self stopRedrawLoop];
      [[NSNotificationCenter defaultCenter] removeObserver:self];
  
++    if (self->_lastImage != NULL)
++    {
++        CGImageRelease(self->_lastImage);
++        self->_lastImage = NULL;
++    }
++
      if (self.trackingArea)
-@@ -178,13 +155,6 @@ - (void)dealloc
+     {
+         [self removeTrackingArea:self.trackingArea];
+@@ -178,13 +177,6 @@ - (void)dealloc
      [super dealloc];
  }
  
@@ -173,7 +212,7 @@ index ad206a5..a6241cf 100644
  // Sets the cairo image
  - (void)setImage:(cairo_surface_t *)image
  {
-@@ -242,6 +212,16 @@ - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+@@ -242,6 +234,16 @@ - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
      return NO;
  }
  
@@ -191,7 +230,7 @@ index ad206a5..a6241cf 100644
  {
      [super updateTrackingAreas];
 diff --git a/src/main/cocoa/CocoaDisplay.mm b/src/main/cocoa/CocoaDisplay.mm
-index c136abb..9080788 100644
+index c136abb..d831d52 100644
 --- a/src/main/cocoa/CocoaDisplay.mm
 +++ b/src/main/cocoa/CocoaDisplay.mm
 @@ -44,8 +44,43 @@
@@ -250,7 +289,7 @@ index c136abb..9080788 100644
              }
  
              CocoaDisplay::~CocoaDisplay()
-@@ -89,9 +129,41 @@
+@@ -89,9 +129,46 @@
                  if (pEstimation == NULL)
                      return STATUS_NO_MEM;
  
@@ -262,11 +301,16 @@ index c136abb..9080788 100644
 +                if (!standaloneApp)
 +                {
 +                    LSPDisplayTimerProxy *proxy = [[LSPDisplayTimerProxy alloc] initWithDisplay:this];
-+                    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:(1.0/60.0)
++                    NSTimer *timer = [NSTimer timerWithTimeInterval:(1.0/60.0)
 +                                              target:proxy
 +                                              selector:@selector(tick:)
 +                                              userInfo:nil
 +                                              repeats:YES];
++                    // NSRunLoopCommonModes, not the default mode: during a live window
++                    // resize (or menu tracking) the run loop switches to an event
++                    // tracking mode where default-mode timers do not fire — the UI
++                    // would stop redrawing for the whole duration of the drag.
++                    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 +                    pIterationTimer      = (void *) timer;   // owned by run loop
 +                    pIterationTimerProxy = (void *) proxy;   // owned by us
 +                }
@@ -292,7 +336,7 @@ index c136abb..9080788 100644
              status_t CocoaDisplay::main()
              {
                  // Initialize the main loop
-@@ -207,12 +279,53 @@
+@@ -207,12 +284,53 @@
                      return;
  
                  NSEventType type = [nsevent type];
@@ -348,7 +392,7 @@ index c136abb..9080788 100644
                  event_t ue = {};
                  init_event(&ue);
                  ue.nTime = timestamp_t([nsevent timestamp] * 1000);
-@@ -222,9 +335,31 @@
+@@ -222,9 +340,31 @@
                  unichar keysym = 0;
  
                  NSPoint locInWindow = [nsevent locationInWindow];
@@ -383,7 +427,7 @@ index c136abb..9080788 100644
  
                  ue.nLeft = locInView.x;
                  ue.nTop = cFrame.size.height - locInView.y;
-@@ -238,6 +373,7 @@
+@@ -238,6 +378,7 @@
                          ue.nType = UIE_MOUSE_DOWN;
                          ue.nCode = decode_mcb(nsevent);
                          lastMouseButton = decode_modifier(nsevent);
@@ -391,7 +435,7 @@ index c136abb..9080788 100644
                          //ue.nState = decode_modifier(nsevent);
                          break;
  
-@@ -249,6 +385,7 @@
+@@ -249,6 +390,7 @@
                          ue.nState = decode_modifier(nsevent);
                          ue.nState = lastMouseButton;
                          lastMouseButton = decode_modifier(nsevent);
@@ -399,7 +443,7 @@ index c136abb..9080788 100644
                          break;
  
                      case NSEventTypeMouseMoved:
-@@ -419,7 +556,7 @@
+@@ -419,7 +561,7 @@
              CocoaWindow *CocoaDisplay::find_window(const nswindow_t & wnd)
              {
                  const NSWindow * const nswnd = wnd.window;
@@ -408,7 +452,7 @@ index c136abb..9080788 100644
                  size_t n = vWindows.size();
  
                  for (size_t i = 0; i < n; ++i)
-@@ -434,9 +571,202 @@
+@@ -434,9 +576,202 @@
                  return NULL;
              }
  
@@ -612,7 +656,7 @@ index c136abb..9080788 100644
              #ifdef USE_LIBFREETYPE
                  sFontManager.destroy();
 diff --git a/src/main/cocoa/CocoaWindow.mm b/src/main/cocoa/CocoaWindow.mm
-index c6f1546..30a48df 100644
+index c6f1546..a1eeefb 100644
 --- a/src/main/cocoa/CocoaWindow.mm
 +++ b/src/main/cocoa/CocoaWindow.mm
 @@ -68,8 +68,10 @@
@@ -680,7 +724,7 @@ index c6f1546..30a48df 100644
                  if (bWrapper)
                  {
                      for (id token in viewObserverTokens)
-@@ -364,7 +379,74 @@
+@@ -364,7 +379,89 @@
                      return STATUS_BAD_STATE;
  
                  bInvalidate = true;
@@ -741,6 +785,21 @@ index c6f1546..30a48df 100644
 +                                        r.nTop    = sSize.nTop;
 +                                        r.nWidth  = b.size.width;
 +                                        r.nHeight = b.size.height;
++                                        // Some hosts (REAPER) shrink the slot below the
++                                        // widget layout's minimum without consulting
++                                        // checkSizeConstraint. Clamp to the constraints
++                                        // the toolkit registered via set_size_constraints
++                                        // so widgets keep their minimum layout; the host
++                                        // window then simply clips the view, like any
++                                        // fixed-minimum plug-in.
++                                        if (sConstraints.nMinWidth > 0)
++                                            r.nWidth  = lsp_max(r.nWidth,  sConstraints.nMinWidth);
++                                        if (sConstraints.nMinHeight > 0)
++                                            r.nHeight = lsp_max(r.nHeight, sConstraints.nMinHeight);
++                                        if (sConstraints.nMaxWidth > 0)
++                                            r.nWidth  = lsp_min(r.nWidth,  sConstraints.nMaxWidth);
++                                        if (sConstraints.nMaxHeight > 0)
++                                            r.nHeight = lsp_min(r.nHeight, sConstraints.nMaxHeight);
 +                                        set_geometry(&r);
 +                                    }];
 +                    pParentFrameToken = [token retain];
@@ -756,7 +815,7 @@ index c6f1546..30a48df 100644
                  return STATUS_OK;
              }
  
-@@ -667,10 +749,18 @@
+@@ -667,10 +764,18 @@
          
              status_t CocoaWindow::update_window_hints()
              {
@@ -776,7 +835,7 @@ index c6f1546..30a48df 100644
                  ws::size_limit_t c;
                  status_t res = get_actual_size_constraints(&c);
                  if (res != STATUS_OK)
-@@ -717,12 +807,9 @@
+@@ -717,12 +822,9 @@
  
              status_t CocoaWindow::set_geometry(const rectangle_t *realize)
              {
@@ -791,7 +850,7 @@ index c6f1546..30a48df 100644
                  rectangle_t old = sSize;
  
                  sSize.nLeft = realize->nLeft;
-@@ -735,25 +822,78 @@
+@@ -735,25 +837,78 @@
                      (old.nWidth == sSize.nWidth) &&
                      (old.nHeight == sSize.nHeight))
                      return STATUS_OK;
@@ -879,7 +938,7 @@ index c6f1546..30a48df 100644
                  if (pSurface != nullptr)
                  {
                      pSurface->resize(sSize.nWidth, sSize.nHeight);
-@@ -780,16 +920,6 @@
+@@ -780,16 +935,6 @@
                  transientParent = nil;
                  commit_border_style(enBorderStyle, nActions);
  
@@ -896,7 +955,7 @@ index c6f1546..30a48df 100644
                  if (!has_parent())
                  {
                      if (over != nullptr)
-@@ -804,7 +934,8 @@
+@@ -804,7 +949,8 @@
                  }
  
                  //[pCocoaWindow orderFrontRegardless];
@@ -906,41 +965,22 @@ index c6f1546..30a48df 100644
  
                  // Simulate missing show event
                  lsp_trace("Emitting UIE_SHOW event");
-@@ -812,7 +943,32 @@
+@@ -812,7 +958,13 @@
                  init_event(&ue);
                  ue.nType       = UIE_SHOW;
                  handle_event(&ue);
 -                
 +
-+                // Embedded mode: assert OUR size to the host. The window is fixed-size
-+                // (canResize() is false on macOS): its size is the widget layout at the
-+                // current UI scaling, so at open the host must be brought to it — not
-+                // the other way around. Emitting UIE_RESIZE with the current size makes
-+                // the tk window fire SLOT_RESIZE, which the VST3 wrapper turns into
-+                // IPlugFrame::resizeView(); the host then resizes its slot and the
-+                // frame observer installed in set_parent() confirms the geometry. This
-+                // also purges any stale FX-window size the host remembered from a
-+                // previous session. Must happen AFTER UIE_SHOW: only then is the tk
-+                // window mapped and processing UIE_RESIZE.
-+                if (((bWrapper) || (pCocoaParentView != nil)) &&
-+                    (sSize.nWidth >= 2) && (sSize.nHeight >= 2))
-+                {
-+                    lsp_trace("show: asserting size %dx%d to the host",
-+                        int(sSize.nWidth), int(sSize.nHeight));
-+                    event_t re;
-+                    init_event(&re);
-+                    re.nType   = UIE_RESIZE;
-+                    re.nLeft   = 0;
-+                    re.nTop    = 0;
-+                    re.nWidth  = sSize.nWidth;
-+                    re.nHeight = sSize.nHeight;
-+                    handle_event(&re);
-+                }
++                // Embedded mode needs no size handshake here: the host prepares the
++                // wrapping window from getSize() before attaching, host-initiated
++                // resizes arrive via IPlugView::onSize() -> set_geometry(), and the
++                // slot-view frame observer installed in set_parent() catches hosts
++                // that resize the slot without calling onSize().
 +
                  // Invalidate window contents for redraw
                  invalidate();
  
-@@ -874,6 +1030,29 @@
+@@ -874,6 +1026,29 @@
              {
                  if (realize == nullptr)
                      return STATUS_BAD_ARGUMENTS;
@@ -970,7 +1010,7 @@ index c6f1546..30a48df 100644
                  if (pCocoaWindow == nil)
                      return STATUS_BAD_STATE;
  
-@@ -883,8 +1062,12 @@
+@@ -883,8 +1058,12 @@
                  ssize_t screenWidth, screenHeight;
                  pCocoaDisplay->screen_size(0, &screenWidth, &screenHeight);
  
@@ -984,7 +1024,7 @@ index c6f1546..30a48df 100644
                  realize->nWidth  = static_cast<ssize_t>(cFrame.size.width);
                  realize->nHeight = static_cast<ssize_t>(cFrame.size.height);
  
-@@ -892,10 +1075,31 @@
+@@ -892,10 +1071,31 @@
              }
  
              void *CocoaWindow::handle()
@@ -1017,7 +1057,7 @@ index c6f1546..30a48df 100644
              //TODO: we need to map all events, and handle create_surface
              status_t CocoaWindow::handle_event(const event_t *ev)
              {
-@@ -917,8 +1121,6 @@
+@@ -917,8 +1117,6 @@
  
                          drop_surface();
                          pSurface = create_surface(pCocoaDisplay, pCocoaView, sSize.nWidth, sSize.nHeight);
@@ -1026,7 +1066,7 @@ index c6f1546..30a48df 100644
                          break;
                      }
  
-@@ -927,7 +1129,6 @@
+@@ -927,7 +1125,6 @@
                          bVisible = false;
                          //if (bWrapper) break;
  
@@ -1034,7 +1074,7 @@ index c6f1546..30a48df 100644
                          drop_surface();
                          break;
                      }
-@@ -946,7 +1147,10 @@
+@@ -946,7 +1143,10 @@
                      case UIE_RESIZE:
                      {
                          lsp_trace("Resize event: {l=%d, t=%d, w=%d, h=%d}", int(ev->nLeft), int(ev->nTop), int(ev->nWidth), int(ev->nHeight));
@@ -1046,7 +1086,7 @@ index c6f1546..30a48df 100644
  
                          sSize.nLeft = ev->nLeft;
                          sSize.nTop = ev->nTop;
-@@ -1057,11 +1261,33 @@
+@@ -1057,11 +1257,33 @@
  
              ssize_t CocoaWindow::left()
              {

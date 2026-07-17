@@ -11,3 +11,4 @@ build-universal/
 *.dmg
 .DS_Store
 _staged-resize-test/
+JOURNAL.md
